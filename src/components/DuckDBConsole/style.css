@@ -1,0 +1,62 @@
+.duckdb-console {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.duckdb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.duckdb-status {
+  font-size: 12px;
+  color: #86909c;
+}
+
+.duckdb-status[data-ready="true"] {
+  color: #00b42a;
+}
+
+.duckdb-input textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+.duckdb-result,
+.duckdb-log {
+  margin-top: 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.duckdb-section-title {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4e5969;
+  background: #f2f3f5;
+  border-bottom: 1px solid #e5e6eb;
+}
+
+.duckdb-result pre,
+.duckdb-log pre {
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.duckdb-log pre {
+  color: #1d2129;
+}

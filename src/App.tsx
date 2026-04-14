@@ -3,6 +3,7 @@ import { bitable, ITableMeta } from "@lark-base-open/js-sdk";
 import { Button, Form } from '@douyinfe/semi-ui';
 import { BaseFormApi } from '@douyinfe/semi-foundation/lib/es/form/interface';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import DuckDBConsole from './components/DuckDBConsole';
 
 export default function App() {
   const [tableMetaList, setTableMetaList] = useState<ITableMeta[]>();
@@ -68,6 +69,7 @@ export default function App() {
         </Form.Select>
         <Button theme='solid' htmlType='submit'>Add Record</Button>
       </Form>
+      <DuckDBConsole />
     </main>
   )
 }
