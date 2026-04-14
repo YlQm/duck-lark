@@ -7,11 +7,15 @@
 
 # testing
 /coverage
-package.lock.json
+package-lock.json
 pnpm-lock.yaml
 
 # production
 /build
+/dist
+
+# wrangler
+.wrangler/
 
 # misc
 .DS_Store
