@@ -15,11 +15,16 @@ Install packages in Shell pane or search and add in Packages pane.
 After running `npm run build`, you can preview the `dist` folder locally and expose it via a temporary public URL:
 
 ```bash
+npm run build
 npx serve dist -l 53555 &
 cloudflared tunnel --url http://localhost:53555
 ```
 
 This will print a public `trycloudflare.com` URL you can share for quick testing.
+
+![alt text](image.png)
+Add new extension to test
+![alt text](image-1.png)
 
 ## Publish
 Please npm run build first, submit it together with the dist directory, and then fill in the form:
