@@ -227,9 +227,8 @@ export default function App() {
     try {
       const inputTable = await bitable.base.getTableById(inputTableId);
       const outputTable = await bitable.base.getTableById(outputTableId);
-      const [inputMeta, outputFields] = await Promise.all([
+      const [inputMeta] = await Promise.all([
         inputTable.getMeta(),
-        outputTable.getFieldMetaList()
       ]);
 
       await loadTableIntoDuckDB(inputTableId);
@@ -245,52 +244,65 @@ export default function App() {
         return;
       }
 
-      const primaryField = (outputFields as IFieldMeta[]).find((f) => (f as any).isPrimary);
-      if (!primaryField) {
-        alert('Output table has no primary field.');
-        return;
+      let outputFields = (await outputTable.getFieldMetaList()) as IFieldMeta[];
+      const sqlColumns = Object.keys(rows[0] || {});
+      const outputFieldMap = new Map(outputFields.map((f) => [f.name.toLowerCase(), f.id]));
+
+      // Create missing fields as text
+      for (const col of sqlColumns) {
+        if (!outputFieldMap.has(col.toLowerCase())) {
+          await outputTable.addField({
+            name: col,
+            type: FieldType.Text,
+            property: null,
+          } as any);
+        }
       }
 
-      const outputRecords: any[] = [];
+      // Re-fetch if we created any fields
+      if (sqlColumns.some((col) => !outputFieldMap.has(col.toLowerCase()))) {
+        outputFields = (await outputTable.getFieldMetaList()) as IFieldMeta[];
+      }
+
+      // Build final column -> fieldId map
+      const finalFieldMap = new Map(outputFields.map((f) => [f.name.toLowerCase(), f.id]));
+      const mappedCols = sqlColumns
+        .map((col) => ({ col, fieldId: finalFieldMap.get(col.toLowerCase()) }))
+        .filter((x): x is { col: string; fieldId: string } => !!x.fieldId);
+
+      // Delete all existing records in output table
+      const existingRecordIds: string[] = [];
       let pageToken: string | undefined;
       do {
         const res = await outputTable.getRecords({ pageSize: 200, pageToken });
-        outputRecords.push(...res.records);
+        existingRecordIds.push(...res.records.map((r) => r.recordId));
         pageToken = res.pageToken;
       } while (pageToken);
 
-      const outputMap = new Map<string, string>();
-      for (const r of outputRecords) {
-        const nameVal = cellValueToString(r.fields[primaryField.id]);
-        outputMap.set(nameVal, r.recordId);
-      }
-
-      const sqlColumns = Object.keys(rows[0] || {});
-      const matchCol =
-        sqlColumns.find((col) => col.toLowerCase() === primaryField.name.toLowerCase()) ||
-        sqlColumns[0];
-
-      const outputFieldMap = new Map(
-        (outputFields as IFieldMeta[]).map((f) => [f.name.toLowerCase(), f])
-      );
-
-      let updatedCount = 0;
-      for (const row of rows) {
-        const matchValue = String(row[matchCol] ?? '');
-        const recordId = outputMap.get(matchValue);
-        if (!recordId) continue;
-
-        for (const [col, val] of Object.entries(row)) {
-          if (col === matchCol) continue;
-          const field = outputFieldMap.get(col.toLowerCase());
-          if (field) {
-            await outputTable.setCellValue(field.id, recordId, String(val));
-          }
+      if (existingRecordIds.length > 0) {
+        const BATCH_DEL = 200;
+        for (let i = 0; i < existingRecordIds.length; i += BATCH_DEL) {
+          await outputTable.deleteRecords(existingRecordIds.slice(i, i + BATCH_DEL));
         }
-        updatedCount++;
       }
 
-      alert(`Updated ${updatedCount} records in output table.`);
+      const BATCH_ADD = 100;
+      let addedCount = 0;
+      for (let i = 0; i < rows.length; i += BATCH_ADD) {
+        const batch = rows.slice(i, i + BATCH_ADD);
+        const recordValues = batch.map((row) => {
+          const fields: Record<string, any> = {};
+          for (const { col, fieldId } of mappedCols) {
+            const val = row[col];
+            fields[fieldId] = val === null || val === undefined ? '' : String(val);
+          }
+          return { fields };
+        });
+        await outputTable.addRecords(recordValues);
+        addedCount += recordValues.length;
+      }
+
+      alert(`Deleted ${existingRecordIds.length} records and inserted ${addedCount} records into output table.`);
     } catch (e: any) {
       alert(`Error: ${e.message || String(e)}`);
     } finally {
