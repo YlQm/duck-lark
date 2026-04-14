@@ -1,6 +1,6 @@
 import './App.css';
 import { bitable, ITableMeta, IFieldMeta, FieldType } from "@lark-base-open/js-sdk";
-import { Button, Form } from '@douyinfe/semi-ui';
+import { Button, Form, Modal, Toast } from '@douyinfe/semi-ui';
 import { BaseFormApi } from '@douyinfe/semi-foundation/lib/es/form/interface';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import DuckDBConsole, { DuckDBConsoleRef } from './components/DuckDBConsole';
@@ -28,7 +28,7 @@ function cellValueToString(val: any): string {
   return JSON.stringify(val);
 }
 
-type Mode = 'column' | 'table';
+type Mode = 'column' | 'table' | 'config';
 
 interface PreviewRow {
   recordId: string;
@@ -37,6 +37,19 @@ interface PreviewRow {
   targetFieldName: string;
   willWrite: boolean;
 }
+
+interface ConfigItem {
+  recordId: string;
+  name: string;
+  mode: Mode;
+  sql: string;
+  selectedTableId: string;
+  targetFieldId: string;
+  inputTableId: string;
+  outputTableId: string;
+}
+
+const CONFIG_TABLE_NAME = '🦆DuckDB_Extension_Config';
 
 export default function App() {
   const [tableMetaList, setTableMetaList] = useState<ITableMeta[]>();
@@ -56,8 +69,15 @@ export default function App() {
   const [outputTableId, setOutputTableId] = useState<string>('');
   const [tableSql, setTableSql] = useState<string>('');
 
+  // Config
+  const [configTableId, setConfigTableId] = useState<string>('');
+  const [configs, setConfigs] = useState<ConfigItem[]>([]);
+  const [saveName, setSaveName] = useState<string>('');
+  const [editingConfig, setEditingConfig] = useState<ConfigItem | null>(null);
+
   const [writing, setWriting] = useState(false);
   const [loadingDuckDB, setLoadingDuckDB] = useState(false);
+  const [loadingConfigs, setLoadingConfigs] = useState(false);
   const formApi = useRef<BaseFormApi>();
   const duckdbRef = useRef<DuckDBConsoleRef>(null);
 
@@ -89,6 +109,155 @@ export default function App() {
     }
   }, []);
 
+  // Initialize config table and load configs
+  const ensureConfigTable = useCallback(async () => {
+    const metaList = await bitable.base.getTableMetaList();
+    const existing = metaList.find((t) => t.name === CONFIG_TABLE_NAME);
+    if (existing) {
+      setConfigTableId(existing.id);
+      return existing.id;
+    }
+    const result = await bitable.base.addTable({
+      name: CONFIG_TABLE_NAME,
+      fields: [
+        { name: 'Name', type: FieldType.Text, property: null } as any,
+        { name: 'Mode', type: FieldType.Text, property: null } as any,
+        { name: 'SQL', type: FieldType.Text, property: null } as any,
+        { name: 'SelectedTableId', type: FieldType.Text, property: null } as any,
+        { name: 'TargetFieldId', type: FieldType.Text, property: null } as any,
+        { name: 'InputTableId', type: FieldType.Text, property: null } as any,
+        { name: 'OutputTableId', type: FieldType.Text, property: null } as any,
+      ],
+    });
+    setConfigTableId(result.tableId);
+    return result.tableId;
+  }, []);
+
+  const loadConfigs = useCallback(async (cfgTableId?: string) => {
+    const id = cfgTableId || configTableId;
+    if (!id) return;
+    setLoadingConfigs(true);
+    try {
+      const table = await bitable.base.getTableById(id);
+      const fields = await table.getFieldMetaList() as IFieldMeta[];
+      const fieldMap = new Map(fields.map((f) => [f.name, f.id]));
+
+      const records: any[] = [];
+      let pageToken: string | undefined;
+      do {
+        const res = await table.getRecords({ pageSize: 200, pageToken });
+        records.push(...res.records);
+        pageToken = res.pageToken;
+      } while (pageToken);
+
+      const list: ConfigItem[] = records.map((r) => ({
+        recordId: r.recordId,
+        name: cellValueToString(r.fields[fieldMap.get('Name')!]),
+        mode: (cellValueToString(r.fields[fieldMap.get('Mode')!]) as Mode) || 'column',
+        sql: cellValueToString(r.fields[fieldMap.get('SQL')!]),
+        selectedTableId: cellValueToString(r.fields[fieldMap.get('SelectedTableId')!]),
+        targetFieldId: cellValueToString(r.fields[fieldMap.get('TargetFieldId')!]),
+        inputTableId: cellValueToString(r.fields[fieldMap.get('InputTableId')!]),
+        outputTableId: cellValueToString(r.fields[fieldMap.get('OutputTableId')!]),
+      }));
+      setConfigs(list);
+    } catch (e: any) {
+      Toast.error(`Load configs failed: ${e.message || String(e)}`);
+    } finally {
+      setLoadingConfigs(false);
+    }
+  }, [configTableId]);
+
+  const saveConfig = useCallback(async () => {
+    if (!configTableId) return;
+    const name = saveName.trim();
+    if (!name) {
+      Toast.warning('Please enter a config name');
+      return;
+    }
+
+    const table = await bitable.base.getTableById(configTableId);
+    const fields = await table.getFieldMetaList() as IFieldMeta[];
+    const fieldMap = new Map(fields.map((f) => [f.name, f.id]));
+
+    const payload = {
+      [fieldMap.get('Name')!]: name,
+      [fieldMap.get('Mode')!]: mode === 'config' ? 'column' : mode,
+      [fieldMap.get('SQL')!]: mode === 'table' ? tableSql : columnSql,
+      [fieldMap.get('SelectedTableId')!]: selectedTableId,
+      [fieldMap.get('TargetFieldId')!]: '',
+      [fieldMap.get('InputTableId')!]: inputTableId,
+      [fieldMap.get('OutputTableId')!]: outputTableId,
+    };
+
+    try {
+      if (editingConfig) {
+        await table.setRecord(editingConfig.recordId, { fields: payload });
+        Toast.success('Config updated');
+      } else {
+        await table.addRecord({ fields: payload });
+        Toast.success('Config saved');
+      }
+      setSaveName('');
+      setEditingConfig(null);
+      await loadConfigs(configTableId);
+    } catch (e: any) {
+      Toast.error(`Save failed: ${e.message || String(e)}`);
+    }
+  }, [configTableId, mode, columnSql, tableSql, selectedTableId, inputTableId, outputTableId, saveName, editingConfig, loadConfigs]);
+
+  const deleteConfig = useCallback(async (recordId: string) => {
+    if (!configTableId) return;
+    Modal.warning({
+      title: 'Delete Config',
+      content: 'Are you sure you want to delete this config?',
+      onOk: async () => {
+        try {
+          const table = await bitable.base.getTableById(configTableId);
+          await table.deleteRecord(recordId);
+          Toast.success('Config deleted');
+          if (editingConfig?.recordId === recordId) {
+            setEditingConfig(null);
+            setSaveName('');
+          }
+          await loadConfigs(configTableId);
+        } catch (e: any) {
+          Toast.error(`Delete failed: ${e.message || String(e)}`);
+        }
+      },
+    });
+  }, [configTableId, editingConfig, loadConfigs]);
+
+  const applyConfig = useCallback((cfg: ConfigItem) => {
+    setMode(cfg.mode);
+    if (cfg.mode === 'column') {
+      setSelectedTableId(cfg.selectedTableId);
+      setColumnSql(cfg.sql);
+      formApi.current?.setValues({ table: cfg.selectedTableId, sql: cfg.sql });
+    } else if (cfg.mode === 'table') {
+      setInputTableId(cfg.inputTableId);
+      setOutputTableId(cfg.outputTableId);
+      setTableSql(cfg.sql);
+    }
+    Toast.success(`Loaded config: ${cfg.name}`);
+  }, []);
+
+  const startEditConfig = useCallback((cfg: ConfigItem) => {
+    setEditingConfig(cfg);
+    setSaveName(cfg.name);
+    if (cfg.mode === 'column') {
+      setMode('column');
+      setSelectedTableId(cfg.selectedTableId);
+      setColumnSql(cfg.sql);
+      formApi.current?.setValues({ table: cfg.selectedTableId, sql: cfg.sql });
+    } else if (cfg.mode === 'table') {
+      setMode('table');
+      setInputTableId(cfg.inputTableId);
+      setOutputTableId(cfg.outputTableId);
+      setTableSql(cfg.sql);
+    }
+  }, []);
+
   useEffect(() => {
     Promise.all([bitable.base.getTableMetaList(), bitable.base.getSelection()])
       .then(([metaList, selection]) => {
@@ -98,6 +267,12 @@ export default function App() {
         setInputTableId(selection.tableId ?? '');
       });
   }, []);
+
+  useEffect(() => {
+    ensureConfigTable().then((id) => {
+      loadConfigs(id);
+    });
+  }, [ensureConfigTable, loadConfigs]);
 
   useEffect(() => {
     if (!selectedTableId) {
@@ -320,6 +495,9 @@ export default function App() {
           <Button theme={mode === 'table' ? 'solid' : 'light'} onClick={() => setMode('table')}>
             Table Mode
           </Button>
+          <Button theme={mode === 'config' ? 'solid' : 'light'} onClick={() => setMode('config')}>
+            Config
+          </Button>
         </div>
         <Button
           theme='light'
@@ -411,6 +589,29 @@ export default function App() {
               </table>
             </div>
           )}
+
+          <div style={{ marginTop: 16, padding: 12, border: '1px solid #e5e6eb', borderRadius: 6, background: '#fafbfc' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: '#4e5969' }}>
+              Save Current Config
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type='text'
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                placeholder={editingConfig ? `Updating: ${editingConfig.name}` : 'Enter config name'}
+                style={{ flex: 1, padding: '6px 10px', border: '1px solid #c9cdd4', borderRadius: 4, fontSize: 13 }}
+              />
+              <Button theme='solid' onClick={saveConfig}>
+                {editingConfig ? 'Update' : 'Save'}
+              </Button>
+              {editingConfig && (
+                <Button theme='light' onClick={() => { setEditingConfig(null); setSaveName(''); }}>
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </div>
         </Form>
       )}
 
@@ -466,7 +667,76 @@ export default function App() {
           >
             Run SQL & Update Output Table by Name
           </Button>
+
+          <div style={{ marginTop: 16, padding: 12, border: '1px solid #e5e6eb', borderRadius: 6, background: '#fafbfc' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: '#4e5969' }}>
+              Save Current Config
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type='text'
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                placeholder={editingConfig ? `Updating: ${editingConfig.name}` : 'Enter config name'}
+                style={{ flex: 1, padding: '6px 10px', border: '1px solid #c9cdd4', borderRadius: 4, fontSize: 13 }}
+              />
+              <Button theme='solid' onClick={saveConfig}>
+                {editingConfig ? 'Update' : 'Save'}
+              </Button>
+              {editingConfig && (
+                <Button theme='light' onClick={() => { setEditingConfig(null); setSaveName(''); }}>
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </div>
         </Form>
+      )}
+
+      {mode === 'config' && (
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Saved Configs</div>
+          {loadingConfigs ? (
+            <div style={{ fontSize: 13, color: '#86909c' }}>Loading configs...</div>
+          ) : configs.length === 0 ? (
+            <div style={{ fontSize: 13, color: '#86909c' }}>No configs saved yet.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {configs.map((cfg) => (
+                <div
+                  key={cfg.recordId}
+                  style={{
+                    padding: 10,
+                    border: '1px solid #e5e6eb',
+                    borderRadius: 6,
+                    background: '#fff',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: 13, overflow: 'hidden' }}>
+                    <div style={{ fontWeight: 600 }}>{cfg.name}</div>
+                    <div style={{ color: '#86909c', fontSize: 12, marginTop: 2 }}>
+                      Mode: {cfg.mode} | SQL: {cfg.sql.slice(0, 40)}{cfg.sql.length > 40 ? '...' : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <Button theme='light' size='small' onClick={() => applyConfig(cfg)}>
+                      Load
+                    </Button>
+                    <Button theme='light' size='small' onClick={() => startEditConfig(cfg)}>
+                      Edit
+                    </Button>
+                    <Button theme='light' type='danger' size='small' onClick={() => deleteConfig(cfg.recordId)}>
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       <DuckDBConsole ref={duckdbRef} />
